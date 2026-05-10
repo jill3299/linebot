@@ -158,6 +158,7 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     source_type = event.source.type
+    print("來源類型：", source_type, "｜來源ID：", event.source.sender_id)
 
     # 群組裡只有被標注才處理
     if source_type == "group":
