@@ -20,7 +20,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
-BOT_USER_ID = os.environ.get("BOT_USER_ID")  # Bot 自己的 User ID
 
 credentials_json = os.environ.get("GOOGLE_CREDENTIALS")
 credentials_dict = json.loads(credentials_json)
@@ -84,19 +83,15 @@ def format_events(events, title):
         name = e.get("summary", "（無標題）")
 
         if "dateTime" in start:
-            # 有時間的行程
             start_dt = datetime.fromisoformat(start["dateTime"]).astimezone(TAIPEI_TZ)
             end_dt = datetime.fromisoformat(end["dateTime"]).astimezone(TAIPEI_TZ)
             date_part = fmt_date(start_dt.strftime("%Y-%m-%d"))
             time_part = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
             lines.append(f"{date_part} {time_part} {name}")
         else:
-            # 全天或多天行程
             start_date = start["date"]
-            # Google Calendar 的全天行程 end date 會多一天，要減回來
             end_date_raw = datetime.strptime(end["date"], "%Y-%m-%d") - timedelta(days=1)
             end_date = end_date_raw.strftime("%Y-%m-%d")
-
             if start_date == end_date:
                 date_part = fmt_date(start_date)
             else:
@@ -158,14 +153,23 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     source_type = event.source.type
-    print("來源類型：", source_type, "｜來源ID：", event.source.sender_id)
+    print("來源類型：", source_type, "｜訊息：", user_message)
 
-    # 群組裡只有被標注才處理
+    # 群組裡要標注 Bot 才處理
     if source_type == "group":
-        bot_mention = f"@{os.environ.get('BOT_NAME', '行事曆小幫手')}"
+        bot_mention = f"@{os.environ.get('BOT_NAME', '黃董的小甜心')}"
         if bot_mention not in user_message:
             return
         user_message = user_message.replace(bot_mention, "").strip()
+
+    # 最優先：判斷是否是回覆修改/刪除
+    quoted_message_id = None
+    if hasattr(event.message, 'quoted_message_id') and event.message.quoted_message_id:
+        quoted_message_id = event.message.quoted_message_id
+
+    if quoted_message_id and quoted_message_id in message_event_map:
+        handle_edit_or_delete(event, user_message, message_event_map[quoted_message_id])
+        return
 
     # 查詢行程關鍵字
     query_today = ["今天的行程", "今天行程", "我今天要幹嘛", "今天要幹嘛"]
@@ -186,15 +190,6 @@ def handle_message(event):
         events = get_events(monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d"))
         title = f"本週行程 {monday.month}/{monday.day} - {sunday.month}/{sunday.day}"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=format_events(events, title)))
-        return
-
-    # 回覆修改/刪除
-    quoted_message_id = None
-    if hasattr(event.message, 'quoted_message_id') and event.message.quoted_message_id:
-        quoted_message_id = event.message.quoted_message_id
-
-    if quoted_message_id and quoted_message_id in message_event_map:
-        handle_edit_or_delete(event, user_message, message_event_map[quoted_message_id])
         return
 
     # 新增行程
@@ -259,50 +254,17 @@ def handle_new_event(event, user_message):
         body=event_body
     ).execute()
 
-    event_key = f"{data['title']}_{data['start_date']}"
+    # 用 Bot 回覆的訊息 ID 對應行程 ID
+    event_key = created["id"]
     message_event_map[event_key] = created["id"]
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+    # 回覆並記錄訊息 ID
+    reply_msg = TextSendMessage(text=reply_text)
+    line_bot_api.reply_message(event.reply_token, reply_msg)
 
-# ==================
-# 修改或刪除
-# ==================
-def handle_edit_or_delete(event, user_message, event_id):
-    prompt = f"""
-    使用者說：「{user_message}」
-    針對已存在的行程，判斷要刪除還是修改，用 JSON 回傳：
-    {{
-        "action": "delete" 或 "update",
-        "title": "新名稱或 null",
-        "start_date": "YYYY-MM-DD 或 null",
-        "end_date": "YYYY-MM-DD 或 null",
-        "start_time": "HH:MM 或 null",
-        "end_time": "HH:MM 或 null"
-    }}
-    今天是 {datetime.now().strftime("%Y-%m-%d")}。
-    只回傳 JSON。
-    """
-
-    result_text = ask_gemini(prompt)
-    result_text = re.sub(r"```json|```", "", result_text).strip()
-    data = json.loads(result_text)
-
-    if data["action"] == "delete":
-        calendar_service.events().delete(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id).execute()
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🗑️ 行程已刪除！"))
-    elif data["action"] == "update":
-        existing = calendar_service.events().get(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id).execute()
-        if data.get("title"):
-            existing["summary"] = data["title"]
-        if data.get("start_date") and data.get("start_time") and data.get("end_time"):
-            existing["start"] = {"dateTime": f"{data['start_date']}T{data['start_time']}:00", "timeZone": "Asia/Taipei"}
-            existing["end"] = {"dateTime": f"{data['end_date'] or data['start_date']}T{data['end_time']}:00", "timeZone": "Asia/Taipei"}
-        elif data.get("start_date"):
-            end = datetime.strptime(data.get("end_date") or data["start_date"], "%Y-%m-%d") + timedelta(days=1)
-            existing["start"] = {"date": data["start_date"]}
-            existing["end"] = {"date": end.strftime("%Y-%m-%d")}
-        calendar_service.events().update(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id, body=existing).execute()
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✏️ 行程已更新！"))
+    # 同時用行程標題+日期存一份，方便對應
+    fallback_key = f"{data['title']}_{data['start_date']}"
+    message_event_map[fallback_key] = created["id"]
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
