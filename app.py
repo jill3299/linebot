@@ -162,13 +162,9 @@ def handle_message(event):
             return
         user_message = user_message.replace(bot_mention, "").strip()
 
-    # 最優先：判斷是否是回覆修改/刪除
-    quoted_message_id = None
-    if hasattr(event.message, 'quoted_message_id') and event.message.quoted_message_id:
-        quoted_message_id = event.message.quoted_message_id
-
-    if quoted_message_id and quoted_message_id in message_event_map:
-        handle_edit_or_delete(event, user_message, message_event_map[quoted_message_id])
+    # 判斷是否是刪除或修改指令
+    if user_message.startswith("刪除 ") or user_message.startswith("修改 "):
+        handle_edit_or_delete_by_name(event, user_message)
         return
 
     # 查詢行程關鍵字
@@ -273,19 +269,20 @@ def handle_new_event(event, user_message):
         return
 
     reply_text = f"✅ 已新增 {len(reply_lines)} 個行程！\n\n" + "\n".join(reply_lines)
-    reply_text += "\n\n💡 回覆此訊息可修改或刪除單一行程"
+    reply_text += "\n\n💡 刪除請說：刪除 行程名稱\n💡 修改請說：修改 行程名稱 改成..."
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
 # ==================
-# 修改或刪除
+# 用行程名稱修改或刪除
 # ==================
-def handle_edit_or_delete(event, user_message, event_id):
+def handle_edit_or_delete_by_name(event, user_message):
     prompt = f"""
     使用者說：「{user_message}」
-    針對已存在的行程，判斷要刪除還是修改，用 JSON 回傳：
+    請判斷這是刪除還是修改行程的指令，用 JSON 回傳：
     {{
         "action": "delete" 或 "update",
-        "title": "新名稱或 null",
+        "target_title": "要操作的行程名稱",
+        "new_title": "新名稱或 null",
         "start_date": "YYYY-MM-DD 或 null",
         "end_date": "YYYY-MM-DD 或 null",
         "start_time": "HH:MM 或 null",
@@ -299,13 +296,37 @@ def handle_edit_or_delete(event, user_message, event_id):
     result_text = re.sub(r"```json|```", "", result_text).strip()
     data = json.loads(result_text)
 
+    target_title = data.get("target_title", "")
+
+    # 在 Google Calendar 搜尋這個行程
+    now = datetime.now(TAIPEI_TZ)
+    events_result = calendar_service.events().list(
+        calendarId=GOOGLE_CALENDAR_ID,
+        timeMin=now.strftime("%Y-%m-%dT00:00:00+08:00"),
+        q=target_title,
+        singleEvents=True,
+        orderBy="startTime",
+        maxResults=1
+    ).execute()
+
+    items = events_result.get("items", [])
+    if not items:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=f"找不到「{target_title}」這個行程，請確認名稱是否正確。")
+        )
+        return
+
+    event_id = items[0]["id"]
+
     if data["action"] == "delete":
         calendar_service.events().delete(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id).execute()
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🗑️ 行程已刪除！"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🗑️ 已刪除「{target_title}」！"))
+
     elif data["action"] == "update":
-        existing = calendar_service.events().get(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id).execute()
-        if data.get("title"):
-            existing["summary"] = data["title"]
+        existing = items[0]
+        if data.get("new_title"):
+            existing["summary"] = data["new_title"]
         if data.get("start_date") and data.get("start_time") and data.get("end_time"):
             existing["start"] = {"dateTime": f"{data['start_date']}T{data['start_time']}:00", "timeZone": "Asia/Taipei"}
             existing["end"] = {"dateTime": f"{data['end_date'] or data['start_date']}T{data['end_time']}:00", "timeZone": "Asia/Taipei"}
@@ -314,7 +335,7 @@ def handle_edit_or_delete(event, user_message, event_id):
             existing["start"] = {"date": data["start_date"]}
             existing["end"] = {"date": end.strftime("%Y-%m-%d")}
         calendar_service.events().update(calendarId=GOOGLE_CALENDAR_ID, eventId=event_id, body=existing).execute()
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✏️ 行程已更新！"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✏️ 已更新「{target_title}」！"))
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
