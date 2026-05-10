@@ -35,6 +35,9 @@ def ask_gemini(prompt):
     }
     response = requests.post(url, json=body)
     result = response.json()
+    print("Gemini 回傳：", result)
+    if "candidates" not in result:
+        raise Exception(f"Gemini 錯誤：{result}")
     return result["candidates"][0]["content"]["parts"][0]["text"]
 
 @app.route("/callback", methods=["POST"])
