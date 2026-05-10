@@ -4,7 +4,7 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import re
 import os
@@ -85,24 +85,36 @@ def handle_message(event):
         )
         return
 
-    event_body = {
-        "summary": data["title"],
-        "start": {
-            "dateTime": f"{data['date']}T{data['start_time']}:00",
-            "timeZone": "Asia/Taipei"
-        },
-        "end": {
-            "dateTime": f"{data['date']}T{data['end_time']}:00",
-            "timeZone": "Asia/Taipei"
+    if data.get("start_time") and data.get("end_time"):
+        event_body = {
+            "summary": data["title"],
+            "start": {
+                "dateTime": f"{data['start_date']}T{data['start_time']}:00",
+                "timeZone": "Asia/Taipei"
+            },
+            "end": {
+                "dateTime": f"{data['end_date']}T{data['end_time']}:00",
+                "timeZone": "Asia/Taipei"
+            }
         }
-    }
+        reply = f"✅ 已新增行程！\n📌 {data['title']}\n📅 {data['start_date']}\n⏰ {data['start_time']} - {data['end_time']}"
+    else:
+        end = datetime.strptime(data["end_date"], "%Y-%m-%d") + timedelta(days=1)
+        event_body = {
+            "summary": data["title"],
+            "start": {"date": data["start_date"]},
+            "end": {"date": end.strftime("%Y-%m-%d")}
+        }
+        if data["start_date"] == data["end_date"]:
+            reply = f"✅ 已新增行程！\n📌 {data['title']}\n📅 {data['start_date']}（全天）"
+        else:
+            reply = f"✅ 已新增行程！\n📌 {data['title']}\n📅 {data['start_date']} ~ {data['end_date']}"
 
     calendar_service.events().insert(
         calendarId=GOOGLE_CALENDAR_ID,
         body=event_body
     ).execute()
 
-    reply = f"✅ 已新增行程！\n📌 {data['title']}\n📅 {data['date']}\n⏰ {data['start_time']} - {data['end_time']}"
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply)
