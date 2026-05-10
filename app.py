@@ -2,23 +2,21 @@ from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime
 import json
 import re
 import os
+import requests
 
 app = Flask(__name__)
 
-# 從環境變數讀取金鑰
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID")
 
-# 從環境變數讀取 Google 憑證
 credentials_json = os.environ.get("GOOGLE_CREDENTIALS")
 credentials_dict = json.loads(credentials_json)
 credentials = service_account.Credentials.from_service_account_info(
@@ -26,12 +24,18 @@ credentials = service_account.Credentials.from_service_account_info(
     scopes=["https://www.googleapis.com/auth/calendar"]
 )
 
-# 初始化各服務
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
 calendar_service = build("calendar", "v3", credentials=credentials)
+
+def ask_gemini(prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    response = requests.post(url, json=body)
+    result = response.json()
+    return result["candidates"][0]["content"]["parts"][0]["text"]
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -62,8 +66,7 @@ def handle_message(event):
     只回傳 JSON，不要其他文字。
     """
 
-    response = model.generate_content(prompt)
-    result_text = response.text.strip()
+    result_text = ask_gemini(prompt)
     result_text = re.sub(r"```json|```", "", result_text).strip()
     data = json.loads(result_text)
 
@@ -98,5 +101,5 @@ def handle_message(event):
     )
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
