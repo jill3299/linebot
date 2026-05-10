@@ -59,13 +59,18 @@ def handle_message(event):
     請從這句話中萃取行程資訊，用 JSON 格式回傳，格式如下：
     {{
         "title": "行程名稱",
-        "date": "YYYY-MM-DD",
-        "start_time": "HH:MM",
-        "end_time": "HH:MM",
+        "start_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "start_time": "HH:MM 或 null",
+        "end_time": "HH:MM 或 null",
         "is_event": true 或 false
     }}
-    今天是 {datetime.now().strftime("%Y-%m-%d")}。
-    如果這句話不像在新增行程，is_event 填 false。
+    規則：
+    - 今天是 {datetime.now().strftime("%Y-%m-%d")}
+    - 如果是單天行程，start_date 和 end_date 填同一天
+    - 如果是多天行程（例如「6/16-24去泰國」），start_date 填開始日，end_date 填結束日
+    - 如果沒有指定時間，start_time 和 end_time 填 null
+    - 如果這句話不像在新增行程，is_event 填 false
     只回傳 JSON，不要其他文字。
     """
 
