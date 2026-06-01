@@ -210,6 +210,7 @@ def handle_new_event(event, user_message):
     ]
     規則：
     - 今天是 {datetime.now().strftime("%Y-%m-%d")}
+    - 如果使用者沒有指定年份，一律選最近的那個日期。例如今天是 5/16，使用者說 8/4，就填 2026-08-04，不要跳到 2027
     - 單天行程 start_date 和 end_date 填同一天
     - 多天行程填對應開始和結束日
     - 沒有指定時間填 null
